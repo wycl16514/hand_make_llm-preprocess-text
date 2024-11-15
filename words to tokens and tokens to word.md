@@ -226,3 +226,237 @@ encode preprocessed: ['Hello', ',', 'do', 'you', 'like', 'tea', '?', '*|endoftex
 ```
 
 As we can see this time, the unseen word "Hello" map to token of *|unk|*.
+
+There is another complicated tokenizing scheme used by chatGPT which has name "byte pair encoding", originally it is a kind of data compression algorithm, let's look into its process. BPE merge frequent used character pair in multiple
+iteration. For example given string:
+
+"low low low low low lower lower newest newest newest newest newest newest widest widest widest"
+
+the word frenquency count is as following:
+
+{
+"low": 5,
+"lower", 2,
+"newest", 6,
+"widest",: 3,
+}
+
+Now, let's split words into characters, and the set of characters will be the ininitial vocab:
+{l, o, w, e, r, n, s, t, i, d}
+
+and each word split into collection of characters as following:
+
+{
+"l o w": 5,
+"l o w e r " : 2,
+"n e w e s t": 6,
+"w i d e s t": 3,
+}
+
+Now let's look at every neighboring character pairs, for example "l o w" has two neighboring pair "lo", "ow", since "lo" appear in "l o w" and "l o w e r", the former has frequent count as 5, and the later has frequent count as 2, then
+pair "lo" has frequent count as 7, by this way, we have following:
+
+{
+"l o": 7,
+"o w": 7,
+"w e": 8,
+"e r": 2,
+"n e": 6,
+"e w": 6,
+"e s": 9,
+"s t": 9,
+"w i": 3,
+"i d": 3,
+"d e": 3,
+}
+
+Now we can see the most frequent pair is "e s" and "s t", then we combine "e s" as one unit name "es", then we add es as one into the vocab:
+{l, o, w, e, r, n, s, t, i, d, es}
+and the collection of each word as :
+
+{
+"l o w": 5,
+"l o w e r": 2,
+"n e w es t": 6,
+"w i d es t": 3,
+}
+
+Now this time the most frequent char  pair is "es" and "t", then we combine them into one as "est" and add to vocab:
+{l, o, w, e, r, n, s, t, i, d, es, est}
+and the word char collection as :
+
+{
+"l o w": 5,
+"l o w e r": 2,
+"n e w est": 6,
+"w i d est": 3
+}
+
+This time the most frequent char pair is “l o", let's add them to vocab:
+
+{l, o, w, e, r, n, s, t, i, d, es, est, lo}
+
+and the word colloection is :
+
+{
+"lo w": 5,
+"lo w e r": 2,
+"n e w est": 6,
+"w i d est": 3
+}
+
+It is easy to see now the most frequent pair is "lo" and "w", merge them and add to vocab:
+{l, o, w, e, r, n, s, t, i, d, es, est, lo, low}
+
+The word char collection is: 
+{
+"low": 5,
+"low e r", 2,
+"n e w est", 6,
+"w i d est": 3
+}
+
+Iterate with this process until the iteration time reach the preset number or the vocab reach desired side. Let's see how to use code to implement the process:
+
+```py
+from collections import defaultdict
+#count word frequency and split word as char collection
+def get_vocab(data):
+  vocab = defaultdict(int)
+  for word in data.split():
+          vocab[' '.join(list(word))] += 1
+  return vocab
+
+vocab = get_vocab("low low low low low lower lower newest newest newest newest newest newest widest widest widest")
+print(vocab)
+```
+Run above code we get following result:
+
+```py
+defaultdict(<class 'int'>, {'l o w': 5, 'l o w e r': 2, 'n e w e s t': 6, 'w i d e s t': 3})
+```
+
+Then we can count the frequency of neighboring char pairs:
+
+```py
+#count the freqency of neighboring char pair
+from collections import Counter
+def get_stats(vocab):
+  pairs = Counter()
+  for word, freq in vocab.items():
+    symbols = word.split()
+    #check neighboring char pair
+    for i in range(len(symbols) - 1):
+      pairs[symbols[i], symbols[i+1]] += freq
+
+  return pairs
+
+pairs = get_stats(vocab)
+print(pairs)
+```
+Running above code we can have following result:
+
+```py
+Counter({('e', 's'): 9, ('s', 't'): 9, ('w', 'e'): 8, ('l', 'o'): 7, ('o', 'w'): 7, ('n', 'e'): 6, ('e', 'w'): 6, ('w', 'i'): 3, ('i', 'd'): 3, ('d', 'e'): 3, ('e', 'r'): 2})
+```
+
+Then we can get the pair with hightest frequency and merge them into one:
+
+```py
+#merge most frequent pair as one
+def merge_vocab(pair, vocab):
+  new_vocab = {}
+  neighboring_chars = ' '.join(pair)
+  #combine two char as one
+  replacement = ''.join(pair) 
+  for word in vocab:
+    new_word = word.replace(neighboring_chars, replacement)
+    new_vocab[new_word] = vocab[word] 
+
+  return new_vocab
+
+most_frequent = max(pairs, key=pairs.get)
+new_vocab = merge_vocab(most_frequent, vocab)
+print(new_vocab)
+```
+
+Running above code we get following result:
+
+```py
+{'l o w': 5, 'l o w e r': 2, 'n e w es t': 6, 'w i d es t': 3}
+```
+
+Let's combine all above steps together and iterate the process for given times:
+
+```py
+
+
+#let's combine all steps and iterate for given times
+def byte_pair_encoding(vocab, num_merges):
+  for i in range(num_merges):
+    pairs = get_stats(vocab)
+    if not pairs:
+      break
+    most_frequent = max(pairs, key=pairs.get)
+    vocab = merge_vocab(most_frequent, vocab)
+    print(f"merget: {i+1}, most frequent: {most_frequent}")
+  return vocab
+
+result_vocab = byte_pair_encoding(vocab, 20)
+print("final vocab")
+for word in result_vocab:
+  print(f"{word}: {result_vocab[word]}")
+```
+
+Running above code we get following result:
+
+```py
+merget: 1, most frequent: ('e', 's')
+merget: 2, most frequent: ('es', 't')
+merget: 3, most frequent: ('l', 'o')
+merget: 4, most frequent: ('lo', 'w')
+merget: 5, most frequent: ('n', 'e')
+merget: 6, most frequent: ('ne', 'w')
+merget: 7, most frequent: ('new', 'est')
+merget: 8, most frequent: ('w', 'i')
+merget: 9, most frequent: ('wi', 'd')
+merget: 10, most frequent: ('wid', 'est')
+merget: 11, most frequent: ('low', 'e')
+merget: 12, most frequent: ('lowe', 'r')
+final vocab
+low: 5
+lower: 2
+newest: 6
+widest: 3
+```
+
+From the result we can understand that, byte pair encoding actually is a kind of data compression, it removes any word repeation in the data with given word and its repeat times. The example we have here is only for illustration, the complete
+implementation is rather complicate, but lukily there is lib already for it, we can install the following lib to use PBE algorithm:
+
+```py
+pip install tiktoken
+```
+Then we can select given tokenizer by following code:
+
+```py
+import tiktoken
+tokenizer = tiktoken.get_encoding('gpt2')
+```
+
+Let's try the encoding alogrithm like following:
+
+```py
+text = ("Hello, do you like a cup of chinese tea? *|endoftext|* In the sunlit terraces"
+       "of someunknowPlace.")
+integers = tokenizer.encode(text, allowed_special={"*|endoftext|*"})
+print(integers)
+strings = tokenizer.decode(integers)
+print(strings)
+```
+
+Running above code we have following result:
+
+```py
+[15496, 11, 466, 345, 588, 257, 6508, 286, 442, 3762, 8887, 30, 1635, 91, 437, 1659, 5239, 91, 9, 554, 262, 4252, 18250, 8812, 2114, 1659, 617, 2954, 2197, 27271, 13]
+Hello, do you like a cup of chinese tea? *|endoftext|* In the sunlit terracesof someunknowPlace.
+```
