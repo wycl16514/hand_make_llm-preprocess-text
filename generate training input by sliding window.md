@@ -1,0 +1,173 @@
+The main task for llm is , given the inpunt text, it should predict the following word correctly. For example given a sentence of "llm is used to generate text", The input and output for llm would be like following:
+
+llm -> is
+llm is -> used
+llm is used -> generate
+llm is used generate -> text
+
+As you can see, it just like we are using a sliding windown to include the input text, and the expected output is the next word that outside the right edge of the window. Remember that we need to tokenize the text first, which means the llm
+will receive an array of numbers and try to predict the next number.
+
+Let's see how we can use code to implement the sliding window strategy. In previous section, we download the trainin text by given url, and the result is html code for the given web page, we need to skip a large part of the returned text to
+the main text that we need to use as training text, As you can see from following image, we need to skip part of beginning text to reach the main text:
+
+![截屏2024-12-02 11 58 34](https://github.com/user-attachments/assets/01da295b-7ac1-46a1-8f62-45e3cc4b816b)
+
+Then using the following code, we get extract the text from the selected text and convert them into tokens:
+
+```py
+import tiktoken
+tokenizer = tiktoken.get_encoding('gpt2')
+
+with open("fire-tongue.txt", "r", encoding="utf-8") as f:
+  raw_text = f.read()
+
+pos = raw_text.index("His investigation of the case of the man")
+training_text = raw_text[pos:] 
+encoded_text = tokenizer.encode(training_text)
+print(len(encoded_text))
+```
+Running above code we have output 14429, which means the raw text is tokenized to 14429 tokens. 
+
+we fix the length of the window to 4, and create the input text and the expected output next word as following:
+
+```py
+window_size = 4
+#window size dertermines how many tokens as input
+x = encoded_text[:window_size]
+#right shift by one place to get the predict word
+y = encoded_text[1 : window_size+1]
+print(f"x:  {x}")
+print(f"y:       {y}")
+
+for i in range(1, window_size + 1):
+  input = encoded_text[:i]
+  expect = encoded_text[i]
+  print(input, "----->", expect)
+
+for i in range(1, window_size + 1):
+  input = encoded_text[:i]
+  expect = encoded_text[i]
+  print(tokenizer.decode(input), "----->" ,tokenizer.decode([expect]))
+```
+Running above code we get the following output:
+
+```py
+x:  [6653, 3645, 286, 262]
+y:       [3645, 286, 262, 1339]
+
+[6653] -----> 3645
+[6653, 3645] -----> 286
+[6653, 3645, 286] -----> 262
+[6653, 3645, 286, 262] -----> 1339
+
+His ----->  investigation
+His investigation ----->  of
+His investigation of ----->  the
+His investigation of the ----->  case
+```
+As we can see from the input, the length of the window is increase by one each time and the expect output for given window input is the next word next to the right edge of the window. It is unreasonable to do all above work mannully, we can
+deligate the job to given library and save our time and energy. The lib we will use is torch, its Dataset and DataLoader can remote the borden of creating input and output:
+
+```py
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+class GPTDatasetV1(Dataset):
+  def __init__(self, input_text, tokenizer, window_size, shift):
+    self.input_ids = []
+    self.target_ids = []
+    token_ids = tokenizer.encode(input_text)
+    for i in range(0, len(token_ids) - window_size, shift):
+      #move the window to the right by steps given by shift
+      input_chunk = token_ids[i : i + window_size]
+      target_chunk = token_ids[i+1 : i + window_size + 1]
+      #tensor basically the same as a vector
+      self.input_ids.append(torch.tensor(input_chunk))
+      self.target_ids.append(torch.tensor(target_chunk))
+
+  def __len__(self):
+    #enable to use len() to get length
+    return len(self.input_ids)
+
+  def __getitem__(self, idx):
+    #enable to use [] to get item just like array
+    return self.input_ids[idx], self.target_ids[idx]
+
+def create_dataloader_v1(text, batch_size = 4, window_size = 256, shift = 128, shuffle = True, drop_last = True, num_workers = 0):
+  tokenizer = tiktoken.get_encoding("gpt2")
+  dataset = GPTDatasetV1(text, tokenizer, window_size, shift)
+  """
+  drap_last: whether to drop the last batch if items in the batch is 
+  not enough specified by batch_size
+
+  num_workers: how many threads used to run the dataloader
+  """
+  dataloader = DataLoader(dataset, batch_size = batch_size, shuffle = shuffle,
+                          drop_last = drop_last, num_workers = num_workers)
+  return dataloader
+
+with open("fire-tongue.txt", "r", encoding="utf-8") as f:
+  raw_text = f.read()
+
+dataloader = create_dataloader_v1(raw_text, batch_size = 1, window_size = 4, 
+                                  shift = 1, shuffle = False)
+data_iter = iter(dataloader)
+first_batch = next(data_iter)
+print(first_batch)
+```
+Running above code we get the following output:
+
+```py
+[tensor([[   27,     0, 18227,  4177]]), tensor([[    0, 18227,  4177,    56]])]
+```
+As we can see that, the target ids is right shift one place base on the input ids. Of course each time we send one input and expect output pair is low efficient, for deep learning training, we always collect a batch with several items
+and send to train the model at once, this can increase the efficiency of training which means we can increase the batch size as following:
+
+```py
+#shift set to 4 means given the input, the model should expect the following four words
+dataloader = create_dataloader_v1(raw_text, batch_size = 16, window_size=4, shift=4, shuffle = False)
+data_iter = iter(dataloader)
+inputs, targets = next(data_iter)
+print(f"inputs\n: {inputs}")
+print(f"outputs:\n: {targets}")
+```
+
+The output would be like following:
+
+```py
+inputs
+: tensor([[   27,     0, 18227,  4177],
+        [   56, 11401, 27711,    29],
+        [  198,    27,  6494,  1398],
+        [ 2625, 16366,    12,  3919],
+        [ 8457,     1, 42392,  2625],
+        [  268,     1, 26672,  2625],
+        [   75,  2213,  5320,   198],
+        [   27,  2256,    29,   198],
+        [   27, 28961, 34534,   316],
+        [ 2625, 48504,    12,    23],
+        [ 5320,   198,    27,  7839],
+        [   29, 13543,    12,    51],
+        [  506,   518,    14, 14126],
+        [  352,   532, 11145,   271],
+        [ 1668,    11,   262,  1479],
+        [ 2691,  5888,  3556,  7839]])
+outputs:
+: tensor([[    0, 18227,  4177,    56],
+        [11401, 27711,    29,   198],
+        [   27,  6494,  1398,  2625],
+        [16366,    12,  3919,  8457],
+        [    1, 42392,  2625,   268],
+        [    1, 26672,  2625,    75],
+        [ 2213,  5320,   198,    27],
+        [ 2256,    29,   198,    27],
+        [28961, 34534,   316,  2625],
+        [48504,    12,    23,  5320],
+        [  198,    27,  7839,    29],
+        [13543,    12,    51,   506],
+        [  518,    14, 14126,   352],
+        [  532, 11145,   271,  1668],
+        [   11,   262,  1479,  2691],
+        [ 5888,  3556,  7839,    29]])
+```
